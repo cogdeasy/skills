@@ -1,0 +1,106 @@
+name: Upstream drift check
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  UPSTREAM_REPO: elevenlabs/skills
+  ISSUE_LABEL: upstream-drift
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream and measure drift
+        id: drift
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --quiet
+          UPSTREAM_DEFAULT=$(git remote show upstream | sed -n 's/.*HEAD branch: //p')
+          BEHIND=$(git rev-list --count "HEAD..upstream/${UPSTREAM_DEFAULT}")
+          AHEAD=$(git rev-list --count "upstream/${UPSTREAM_DEFAULT}..HEAD")
+          echo "behind=${BEHIND}" >> "$GITHUB_OUTPUT"
+          echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=${UPSTREAM_DEFAULT}" >> "$GITHUB_OUTPUT"
+
+          # Skill directories deleted upstream but still present in the fork
+          UPSTREAM_SKILLS=$(git ls-tree "upstream/${UPSTREAM_DEFAULT}" --name-only -d)
+          REMOVED=""
+          for dir in */; do
+            dir="${dir%/}"
+            [ -f "${dir}/SKILL.md" ] || continue
+            if ! echo "${UPSTREAM_SKILLS}" | grep -qx "${dir}"; then
+              REMOVED="${REMOVED:+${REMOVED} }${dir}"
+            fi
+          done
+          echo "removed_skills=${REMOVED}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "commit_log<<EOF"
+            git log --oneline "HEAD..upstream/${UPSTREAM_DEFAULT}" | head -30
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update drift issue
+        if: steps.drift.outputs.behind != '0' || steps.drift.outputs.removed_skills != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEHIND: ${{ steps.drift.outputs.behind }}
+          AHEAD: ${{ steps.drift.outputs.ahead }}
+          UPSTREAM_BRANCH: ${{ steps.drift.outputs.upstream_branch }}
+          REMOVED_SKILLS: ${{ steps.drift.outputs.removed_skills }}
+          COMMIT_LOG: ${{ steps.drift.outputs.commit_log }}
+        run: |
+          TITLE="Fork drift: ${BEHIND} commit(s) behind ${UPSTREAM_REPO}"
+          BODY="## Upstream drift report
+
+          The fork is **${BEHIND} commit(s) behind** and ${AHEAD} commit(s) ahead of \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`.
+
+          ### Missing upstream commits
+          \`\`\`
+          ${COMMIT_LOG}
+          \`\`\`
+          "
+          if [ -n "${REMOVED_SKILLS}" ]; then
+            BODY="${BODY}
+          ### Skills removed upstream but still present in this fork
+          ${REMOVED_SKILLS}
+
+          Consider removing these skill directories (and their \`evals/\` configs) to match upstream.
+          "
+          fi
+          BODY="${BODY}
+          To sync: \`git fetch upstream && git merge upstream/${UPSTREAM_BRANCH}\` (or use GitHub's *Sync fork* button).
+
+          _Last checked: $(date -u +'%Y-%m-%d %H:%M UTC') by the scheduled drift-check workflow._"
+
+          gh label create "${ISSUE_LABEL}" --repo "${GITHUB_REPOSITORY}" --color D93F0B \
+            --description "Fork has drifted behind upstream" 2>/dev/null || true
+
+          EXISTING=$(gh issue list --repo "${GITHUB_REPOSITORY}" --label "${ISSUE_LABEL}" --state open --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh issue edit "${EXISTING}" --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${BODY}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${BODY}" --label "${ISSUE_LABEL}"
+          fi
+
+      - name: Close drift issue when in sync
+        if: steps.drift.outputs.behind == '0' && steps.drift.outputs.removed_skills == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING=$(gh issue list --repo "${GITHUB_REPOSITORY}" --label "${ISSUE_LABEL}" --state open --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh issue close "${EXISTING}" --repo "${GITHUB_REPOSITORY}" \
+              --comment "Fork is back in sync with ${UPSTREAM_REPO}. Closing."
+          fi
