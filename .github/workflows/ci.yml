@@ -39,7 +39,7 @@ jobs:
       - name: Install ruff
         run: pip install ruff
       - name: Ruff check
-        run: ruff check evals tests
+        run: ruff check evals scripts tests
 
   tests:
     name: Unit and integration tests

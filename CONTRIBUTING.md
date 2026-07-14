@@ -62,7 +62,7 @@ python3 evals/run_all.py --dry-run
 
 # Lint and tests
 pip install ruff pytest
-ruff check evals tests
+ruff check evals scripts tests
 pytest
 ```
 
@@ -94,6 +94,6 @@ Results are written to `evals/results/<timestamp>/` (gitignored) with a
 ## Pull requests
 
 - Keep PRs focused: one skill or one harness change per PR.
-- Make sure `python3 evals/validate_skills.py`, `ruff check evals tests`, and
+- Make sure `python3 evals/validate_skills.py`, `ruff check evals scripts tests`, and
   `pytest` pass locally before opening the PR.
 - Update `CHANGELOG.md` under `[Unreleased]`.
