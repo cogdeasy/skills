@@ -40,7 +40,7 @@ jobs:
             dir="${dir%/}"
             [ -f "${dir}/SKILL.md" ] || continue
             if ! echo "${UPSTREAM_SKILLS}" | grep -qx "${dir}"; then
-              REMOVED="${REMOVED} ${dir}"
+              REMOVED="${REMOVED:+${REMOVED} }${dir}"
             fi
           done
           echo "removed_skills=${REMOVED}" >> "$GITHUB_OUTPUT"
