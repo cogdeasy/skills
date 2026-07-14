@@ -112,11 +112,12 @@ def validate_frontmatter(fields: dict[str, str], skill_dir_name: str) -> list[st
         except json.JSONDecodeError as exc:
             errors.append("metadata is not valid JSON: %s" % exc)
 
-    for key in fields:
-        if key not in KNOWN_FIELDS:
-            errors.append("unknown frontmatter field: %s" % key)
-
     return errors
+
+
+def unknown_fields(fields: dict[str, str]) -> list[str]:
+    """Return frontmatter field names not in the Agent Skills spec (warnings, not errors)."""
+    return [key for key in fields if key not in KNOWN_FIELDS]
 
 
 RELATIVE_LINK_RE = re.compile(r"\]\((?!https?://|mailto:|#)([^)\s]+)\)")
@@ -206,6 +207,8 @@ def validate_skill(skill_dir: Path, evals_dir: Path = EVALS_DIR) -> list[str]:
     else:
         errors.extend(validate_frontmatter(fields, skill_dir.name))
         errors.extend(validate_relative_links(content, skill_dir))
+        for field in unknown_fields(fields):
+            print("WARN %s: unknown frontmatter field: %s" % (skill_dir.name, field), file=sys.stderr)
 
     skill_evals_dir = evals_dir / skill_dir.name
     evals_json = skill_evals_dir / "evals.json"

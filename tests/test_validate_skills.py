@@ -4,6 +4,7 @@ import json
 import pytest
 from validate_skills import (
     parse_frontmatter,
+    unknown_fields,
     validate_evals_json,
     validate_frontmatter,
     validate_relative_links,
@@ -96,11 +97,10 @@ class TestValidateFrontmatter:
         )
         assert any("metadata is not valid JSON" in e for e in errors)
 
-    def test_unknown_field(self):
-        errors = validate_frontmatter(
-            {"name": "my-skill", "description": "d", "bogus": "x"}, "my-skill"
-        )
-        assert any("unknown frontmatter field: bogus" in e for e in errors)
+    def test_unknown_field_is_warning_not_error(self):
+        fields = {"name": "my-skill", "description": "d", "bogus": "x"}
+        assert validate_frontmatter(fields, "my-skill") == []
+        assert unknown_fields(fields) == ["bogus"]
 
 
 class TestValidateRelativeLinks:
