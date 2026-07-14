@@ -1,0 +1,25 @@
+[project]
+name = "elevenlabs-skills-evals"
+version = "0.1.0"
+description = "Eval harness and validation tooling for ElevenLabs agent skills"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+include = ["evals/*.py", "tests/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E402",  # module docstring after __future__ import in run_all.py
+    "E501",  # existing harness code uses long lines
+    "UP031", # existing harness code uses % formatting
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: end-to-end validation of every skill directory in the repo",
+]

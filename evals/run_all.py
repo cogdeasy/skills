@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 """Run trigger and functional evaluations across all ElevenLabs skills.
 
 Functional evals run cursor-agent with workspace = each eval's scratch folder only; skill
@@ -61,8 +62,6 @@ def _ensure_cursor_agent_available() -> None:
         )
         sys.exit(1)
 
-
-_ensure_cursor_agent_available()
 
 # Cursor discovers project skills from `.cursor/skills/` in the agent workspace.
 # Trigger evals stage a uniquely named copy in each temporary workspace so the
@@ -780,7 +779,7 @@ def generate_report(trigger_results, functional_results, output_dir, skills):
         fr = func_by_skill.get(skill, {})
 
         if "error" in tr:
-            trigger_str = f"error"
+            trigger_str = "error"
         elif "summary" in tr:
             s = tr["summary"]
             trigger_str = f"{s['passed']}/{s['total']}"
@@ -860,6 +859,44 @@ def generate_report(trigger_results, functional_results, output_dir, skills):
     return "\n".join(lines)
 
 
+def dry_run(skills: list[str]) -> int:
+    """Validate skills and eval configs without invoking cursor-agent.
+
+    Checks each skill parses via parse_skill_md and passes the frontmatter and
+    eval-config validation in evals/validate_skills.py. Returns a process exit code.
+    """
+    from validate_skills import validate_skill
+
+    total_errors = 0
+    for skill_name in skills:
+        skill_path = REPO_ROOT / skill_name
+        errors = []
+        if not skill_path.is_dir():
+            errors.append("skill directory not found")
+        else:
+            try:
+                parse_skill_md(skill_path)
+            except (ValueError, OSError) as exc:
+                errors.append("parse_skill_md failed: %s" % exc)
+            errors.extend(validate_skill(skill_path))
+            for cfg in ("evals.json", "trigger_eval.json"):
+                if not (EVALS_DIR / skill_name / cfg).exists():
+                    errors.append("missing eval config: evals/%s/%s" % (skill_name, cfg))
+        if errors:
+            total_errors += len(errors)
+            print("FAIL %s" % skill_name, file=sys.stderr)
+            for err in errors:
+                print("  - %s" % err, file=sys.stderr)
+        else:
+            print("OK   %s" % skill_name, file=sys.stderr)
+
+    if total_errors:
+        print("\nDry run failed: %d error(s)" % total_errors, file=sys.stderr)
+        return 1
+    print("\nDry run passed: %d skill(s) validated" % len(skills), file=sys.stderr)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run evaluations across all ElevenLabs skills")
     parser.add_argument("--skills", nargs="*", default=ALL_SKILLS, help="Skills to evaluate (default: all)")
@@ -876,10 +913,20 @@ def main():
     parser.add_argument("--trigger-timeout", type=int, default=45, help="Timeout per trigger query (seconds)")
     parser.add_argument("--output-dir", default=None, help="Output directory (default: evals/results/<timestamp>)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate skills and eval configs without invoking cursor-agent",
+    )
     args = parser.parse_args()
 
     if args.trigger_only and args.functional_only:
         parser.error("cannot combine --trigger-only and --functional-only")
+
+    if args.dry_run:
+        sys.exit(dry_run(args.skills))
+
+    _ensure_cursor_agent_available()
 
     run_trigger = not args.functional_only
     run_functional = not args.trigger_only
@@ -906,7 +953,7 @@ def main():
             # If we somehow failed repeatedly, let the exception surface
             output_dir.mkdir(parents=True, exist_ok=False)
 
-    print(f"Skills Evaluation", file=sys.stderr)
+    print("Skills Evaluation", file=sys.stderr)
     print(f"  Skills: {', '.join(args.skills)}", file=sys.stderr)
     print(f"  Trigger evals: {'yes' if run_trigger else 'no'}", file=sys.stderr)
     print(f"  Functional evals: {'yes' if run_functional else 'no'}", file=sys.stderr)
