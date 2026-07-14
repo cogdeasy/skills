@@ -3,6 +3,7 @@
 These exercise the real repo contents (no ElevenLabs API access required) plus the
 eval harness's dry-run mode as a CLI smoke test.
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -69,3 +70,55 @@ class TestCliSmoke:
         )
         assert result.returncode == 1
         assert "skill directory not found" in result.stderr
+
+
+@pytest.mark.integration
+class TestUpstreamSyncPrCli:
+    """CLI tests for scripts/upstream_sync_pr.py as invoked by the sync workflow."""
+
+    SCRIPT = REPO_ROOT / "scripts" / "upstream_sync_pr.py"
+
+    ENV = {
+        "UPSTREAM_REPO": "elevenlabs/skills",
+        "UPSTREAM_BRANCH": "main",
+        "BEHIND": "4",
+        "AHEAD": "1",
+        "COMMIT_LOG": "abc1234 Update skills\ndef5678 Fix docs",
+        "CONFLICT_FILES": "",
+        "REMOVED_SKILLS": "",
+    }
+
+    def run_script(self, *args, **env_overrides):
+        env = {**self.ENV, **env_overrides, "PATH": os.environ.get("PATH", "")}
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), *args],
+            capture_output=True, text=True, cwd=str(REPO_ROOT), env=env,
+        )
+
+    def test_title(self):
+        result = self.run_script("--title")
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "Sync with upstream: merge 4 commits from elevenlabs/skills"
+
+    def test_body_clean_merge(self):
+        result = self.run_script()
+        assert result.returncode == 0, result.stderr
+        assert "**4 commit(s) behind**" in result.stdout
+        assert "abc1234 Update skills" in result.stdout
+        assert "The merge completed cleanly with no conflicts." in result.stdout
+
+    def test_body_with_conflicts_and_removed_skills(self):
+        result = self.run_script(
+            CONFLICT_FILES="agents/SKILL.md\nmusic/SKILL.md",
+            REMOVED_SKILLS="setup-api-key",
+        )
+        assert result.returncode == 0, result.stderr
+        assert "[!WARNING]" in result.stdout
+        assert "- `agents/SKILL.md`" in result.stdout
+        assert "- `music/SKILL.md`" in result.stdout
+        assert "- `setup-api-key`" in result.stdout
+
+    def test_invalid_behind_is_an_error(self):
+        result = self.run_script(BEHIND="not-a-number")
+        assert result.returncode == 1
+        assert "must be integers" in result.stderr

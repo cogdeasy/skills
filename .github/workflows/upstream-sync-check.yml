@@ -6,11 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: write
+  pull-requests: write
   issues: write
-  contents: read
 
 env:
   UPSTREAM_REPO: elevenlabs/skills
+  SYNC_BRANCH: upstream-sync
+  PR_LABEL: upstream-sync
   ISSUE_LABEL: upstream-drift
 
 jobs:
@@ -51,8 +54,35 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Open or update drift issue
-        if: steps.drift.outputs.behind != '0' || steps.drift.outputs.removed_skills != ''
+      - name: Merge upstream into sync branch
+        id: merge
+        if: steps.drift.outputs.behind != '0'
+        env:
+          UPSTREAM_BRANCH: ${{ steps.drift.outputs.upstream_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          DEFAULT_BRANCH="${GITHUB_REF_NAME}"
+          echo "default_branch=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "${SYNC_BRANCH}" "origin/${DEFAULT_BRANCH}"
+          CONFLICTS=""
+          if ! git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            # Commit the conflict markers as-is; the PR body flags them for
+            # manual resolution.
+            git add -A
+            git commit -m "Merge upstream/${UPSTREAM_BRANCH} (unresolved conflicts)"
+          fi
+          {
+            echo "conflict_files<<EOF"
+            echo "${CONFLICTS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          git push --force origin "${SYNC_BRANCH}"
+
+      - name: Open or update upstream-sync PR
+        if: steps.drift.outputs.behind != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           BEHIND: ${{ steps.drift.outputs.behind }}
@@ -60,27 +90,47 @@ jobs:
           UPSTREAM_BRANCH: ${{ steps.drift.outputs.upstream_branch }}
           REMOVED_SKILLS: ${{ steps.drift.outputs.removed_skills }}
           COMMIT_LOG: ${{ steps.drift.outputs.commit_log }}
+          CONFLICT_FILES: ${{ steps.merge.outputs.conflict_files }}
+          DEFAULT_BRANCH: ${{ steps.merge.outputs.default_branch }}
         run: |
-          TITLE="Fork drift: ${BEHIND} commit(s) behind ${UPSTREAM_REPO}"
+          TITLE=$(python3 scripts/upstream_sync_pr.py --title)
+          BODY=$(python3 scripts/upstream_sync_pr.py)
+
+          gh label create "${PR_LABEL}" --repo "${GITHUB_REPOSITORY}" --color 0E8A16 \
+            --description "Automated upstream sync" 2>/dev/null || true
+
+          EXISTING=$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${SYNC_BRANCH}" \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh pr edit "${EXISTING}" --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${BODY}"
+          else
+            gh pr create --repo "${GITHUB_REPOSITORY}" --base "${DEFAULT_BRANCH}" \
+              --head "${SYNC_BRANCH}" --title "${TITLE}" --body "${BODY}" --label "${PR_LABEL}"
+          fi
+
+          # The sync PR supersedes any open drift issue
+          ISSUE=$(gh issue list --repo "${GITHUB_REPOSITORY}" --label "${ISSUE_LABEL}" \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${ISSUE}" ]; then
+            gh issue close "${ISSUE}" --repo "${GITHUB_REPOSITORY}" \
+              --comment "Superseded by the automated upstream-sync PR."
+          fi
+
+      - name: Open or update drift issue (removed skills only)
+        if: steps.drift.outputs.behind == '0' && steps.drift.outputs.removed_skills != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REMOVED_SKILLS: ${{ steps.drift.outputs.removed_skills }}
+        run: |
+          TITLE="Fork drift: skills removed upstream but still present in this fork"
           BODY="## Upstream drift report
 
-          The fork is **${BEHIND} commit(s) behind** and ${AHEAD} commit(s) ahead of \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\`.
+          The fork is up to date with \`${UPSTREAM_REPO}\`, but the following skill
+          directories were removed upstream and are still present here:
 
-          ### Missing upstream commits
-          \`\`\`
-          ${COMMIT_LOG}
-          \`\`\`
-          "
-          if [ -n "${REMOVED_SKILLS}" ]; then
-            BODY="${BODY}
-          ### Skills removed upstream but still present in this fork
           ${REMOVED_SKILLS}
 
           Consider removing these skill directories (and their \`evals/\` configs) to match upstream.
-          "
-          fi
-          BODY="${BODY}
-          To sync: \`git fetch upstream && git merge upstream/${UPSTREAM_BRANCH}\` (or use GitHub's *Sync fork* button).
 
           _Last checked: $(date -u +'%Y-%m-%d %H:%M UTC') by the scheduled drift-check workflow._"
 
@@ -94,11 +144,17 @@ jobs:
             gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${BODY}" --label "${ISSUE_LABEL}"
           fi
 
-      - name: Close drift issue when in sync
+      - name: Close sync PR and drift issue when in sync
         if: steps.drift.outputs.behind == '0' && steps.drift.outputs.removed_skills == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          PR=$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${SYNC_BRANCH}" \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${PR}" ]; then
+            gh pr close "${PR}" --repo "${GITHUB_REPOSITORY}" \
+              --comment "Fork is back in sync with ${UPSTREAM_REPO}. Closing." --delete-branch
+          fi
           EXISTING=$(gh issue list --repo "${GITHUB_REPOSITORY}" --label "${ISSUE_LABEL}" --state open --json number --jq '.[0].number // empty')
           if [ -n "${EXISTING}" ]; then
             gh issue close "${EXISTING}" --repo "${GITHUB_REPOSITORY}" \
