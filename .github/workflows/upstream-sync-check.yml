@@ -59,10 +59,10 @@ jobs:
         if: steps.drift.outputs.behind != '0'
         env:
           UPSTREAM_BRANCH: ${{ steps.drift.outputs.upstream_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          DEFAULT_BRANCH="${GITHUB_REF_NAME}"
           echo "default_branch=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
 
           git checkout -B "${SYNC_BRANCH}" "origin/${DEFAULT_BRANCH}"
